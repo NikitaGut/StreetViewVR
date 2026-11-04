@@ -15,6 +15,8 @@ canvas{display:block;touch-action:none}
 </style></head><body>
 <div id="ui"><h2>StreetViewVR</h2>
 <input id="place" value="Paris, Eiffel Tower">
+<label for="image-shift">Сближение изображений VR: <span id="shift-value">0</span> px</label>
+<input id="image-shift" type="range" min="-30" max="30" value="0" step="1">
 <button id="vr">Старт в VR (очки)</button>
 <button id="flat" style="background:#444">Без очков (мышь / гироскоп)</button>
 <button id="diagnose" style="background:#444">Проверить датчики</button>
@@ -27,6 +29,7 @@ const TOKEN="MLY|39813497478295717|39d574015db5e3d8e95d4ebddbbfef1e";   // <-- �
 const IMG="thumb_2048_url";             // для лучшего качества: "thumb_original_url" (тяжелее)
 const CAMH=2.5, S=1024, D=Math.PI/180, G="https://graph.mapillary.com/", T=encodeURIComponent(TOKEN);
 const $=id=>document.getElementById(id);
+$('image-shift').oninput=()=>$('shift-value').textContent=$('image-shift').value;
 let stereo=false,cal=false,mapOpen=true,mapDirty=true,busy=false,cur=null,H0=null,az0=0,dots=[],tiles={};
 let map={lat:48.8584,lon:2.2945,z:18};
 const R=new THREE.WebGLRenderer({antialias:true});R.setPixelRatio(Math.min(devicePixelRatio,2));R.setScissorTest(true);
@@ -54,15 +57,18 @@ clearTimeout(hT);if(ms)hT=setTimeout(()=>hud.visible=false,ms)}
 // ориентация головы
 const q=new THREE.Quaternion(),e=new THREE.Euler(),e2=new THREE.Euler(),q0=new THREE.Quaternion(),Z=new THREE.Vector3(0,0,1);
 const q1=new THREE.Quaternion(-Math.SQRT1_2,0,0,Math.SQRT1_2);
-let devQ=null,hasSensor=false,yaw=0,pit=0,sensorTimer,sensorPending=false,lastRelative=0;
+let devQ=null,hasSensor=false,yaw=0,pit=0,sensorTimer,sensorPending=false,lastRelative=0,lastAbsolute=0,sensorSource=null;
+const sourceOffset=new THREE.Quaternion(),rawQ=new THREE.Quaternion();
 function sensorStatus(message,retry=false){$('sensor-message').textContent=message;$('sensor-status').hidden=false;$('sensor-enable').hidden=!retry}
-function orientation(ev){
+function orientation(ev,source){
 if(![ev.alpha,ev.beta,ev.gamma].every(Number.isFinite))return;
 const angle=screen.orientation&&Number.isFinite(screen.orientation.angle)?screen.orientation.angle:window.orientation||0;
-e.set(ev.beta*D,ev.alpha*D,-ev.gamma*D,'YXZ');devQ=(devQ||new THREE.Quaternion()).setFromEuler(e).multiply(q1).multiply(q0.setFromAxisAngle(Z,-angle*D));
+e.set(ev.beta*D,ev.alpha*D,-ev.gamma*D,'YXZ');rawQ.setFromEuler(e).multiply(q1).multiply(q0.setFromAxisAngle(Z,-angle*D));
+if(source!==sensorSource){if(cal&&devQ)sourceOffset.copy(devQ).multiply(rawQ.clone().invert());else sourceOffset.identity();sensorSource=source}
+devQ=(devQ||new THREE.Quaternion()).copy(sourceOffset).multiply(rawQ);
 hasSensor=true;clearTimeout(sensorTimer);$('sensor-status').hidden=true}
-function relativeOrientation(ev){if(![ev.alpha,ev.beta,ev.gamma].every(Number.isFinite))return;lastRelative=Date.now();orientation(ev)}
-function absoluteOrientation(ev){if(!lastRelative||Date.now()-lastRelative>750)orientation(ev)}
+function relativeOrientation(ev){if(![ev.alpha,ev.beta,ev.gamma].every(Number.isFinite))return;lastRelative=Date.now();if(sensorSource!=='absolute'||lastRelative-lastAbsolute>750)orientation(ev,'relative')}
+function absoluteOrientation(ev){if(![ev.alpha,ev.beta,ev.gamma].every(Number.isFinite))return;lastAbsolute=Date.now();if(sensorSource==='absolute'||!lastRelative||lastAbsolute-lastRelative>750)orientation(ev,'absolute')}
 async function enableSensor(){
 if(sensorPending)return;
 if(!window.isSecureContext){sensorStatus('Гироскопу нужен HTTPS. Открой сайт по защищённой ссылке.');return}
@@ -87,7 +93,7 @@ $('diagnose').disabled=true;
 const data={orientation:{count:0,last:null,min:{},max:{}},absolute:{count:0,last:null,min:{},max:{}},motion:{count:0,last:null}};
 const fmt=n=>Number.isFinite(n)?n.toFixed(1):'нет';
 function render(){const line=(name,s)=>`${name}: событий ${s.count}\n  α ${fmt(s.last?.alpha)} [${fmt(s.min.alpha)}…${fmt(s.max.alpha)}]  β ${fmt(s.last?.beta)} [${fmt(s.min.beta)}…${fmt(s.max.beta)}]  γ ${fmt(s.last?.gamma)} [${fmt(s.min.gamma)}…${fmt(s.max.gamma)}]`;
-panel.textContent=`Поворачивай телефон 10 секунд. Числа в скобках — минимум и максимум.\nHTTPS: ${window.isSecureContext?'да':'нет'}; угол экрана: ${screen.orientation?.angle??window.orientation??'нет'}\n${line('Ориентация',data.orientation)}\n${line('Абсолютная',data.absolute)}\nДвижение: событий ${data.motion.count}; вращение α ${fmt(data.motion.last?.alpha)}, β ${fmt(data.motion.last?.beta)}, γ ${fmt(data.motion.last?.gamma)}\n${status}`}
+panel.textContent=`Поворачивай телефон 10 секунд. Числа в скобках — минимум и максимум.\nHTTPS: ${window.isSecureContext?'да':'нет'}; угол экрана: ${screen.orientation?.angle??window.orientation??'нет'}\n${line('Ориентация',data.orientation)}\n${line('Абсолютная',data.absolute)}\nДвижение: событий ${data.motion.count}; вращение α ${fmt(data.motion.last?.alpha)}, β ${fmt(data.motion.last?.beta)}, γ ${fmt(data.motion.last?.gamma)}\nИсточник камеры: ${sensorSource||'ещё не выбран (начни просмотр)'}\n${status}`}
 let status='Запрос доступа…';render();
 function record(s,ev){s.count++;s.last={alpha:ev.alpha,beta:ev.beta,gamma:ev.gamma};for(const k of ['alpha','beta','gamma'])if(Number.isFinite(ev[k])){s.min[k]=Math.min(s.min[k]??ev[k],ev[k]);s.max[k]=Math.max(s.max[k]??ev[k],ev[k])}render()}
 const onOrientation=ev=>record(data.orientation,ev),onAbsolute=ev=>record(data.absolute,ev),onMotion=ev=>{data.motion.count++;data.motion.last=ev.rotationRate;render()};
@@ -107,6 +113,7 @@ const fwd=()=>new THREE.Vector3(0,0,-1).applyQuaternion(q), az=v=>Math.atan2(v.x
 // карта (тайлы OSM + точки панорам Mapillary)
 const wpx=(lat,lon,z)=>{const n=256*2**z,s=Math.sin(lat*D);return[(lon+180)/360*n,(.5-Math.log((1+s)/(1-s))/(4*Math.PI))*n]};
 const ll=(x,y,z)=>{const n=256*2**z;return[Math.atan(Math.sinh(Math.PI*(1-2*y/n)))/D,x/n*360-180]};
+const MAP_BUTTON_X=S-60, MAP_BUTTON_RADIUS=45, MAP_BUTTON_Y=[60,180,300];
 function drawMap(){const{lat,lon,z}=map,[cx,cy]=wpx(lat,lon,z),x0=cx-S/2,y0=cy-S/2,n=2**z;
 mx.fillStyle='#ccd';mx.fillRect(0,0,S,S);
 for(let tx=Math.floor(x0/256);tx<=Math.floor((x0+S)/256);tx++)for(let ty=Math.floor(y0/256);ty<=Math.floor((y0+S)/256);ty++){
@@ -118,8 +125,9 @@ for(const d of dots){const[px,py]=wpx(d[1],d[0],z);mx.beginPath();mx.arc(px-x0,p
 if(cur){const[px,py]=wpx(cur.lat,cur.lon,z);mx.fillStyle='#2d7ff9';mx.lineWidth=4;mx.beginPath();mx.arc(px-x0,py-y0,14,0,7);mx.fill();mx.stroke()}
 mx.fillStyle='rgba(0,0,0,.18)';mx.fillRect(0,0,S,90);mx.fillRect(0,S-90,S,90);mx.fillRect(0,0,90,S);mx.fillRect(S-90,0,90,S);
 mx.fillStyle='#fff';mx.strokeStyle='#333';mx.lineWidth=4;
-for(const y of[60,180]){mx.beginPath();mx.arc(S-60,y,45,0,7);mx.fill();mx.stroke()}
-mx.fillStyle='#000';mx.font='bold 70px sans-serif';mx.textAlign='center';mx.fillText('+',S-60,85);mx.fillText('−',S-60,205);
+for(const y of MAP_BUTTON_Y){mx.beginPath();mx.arc(MAP_BUTTON_X,y,MAP_BUTTON_RADIUS,0,7);mx.fill();mx.stroke()}
+mx.fillStyle='#000';mx.font='bold 70px sans-serif';mx.textAlign='center';
+['×','+','−'].forEach((label,i)=>mx.fillText(label,MAP_BUTTON_X,MAP_BUTTON_Y[i]+25));
 mx.font='20px sans-serif';mx.textAlign='left';mx.fillText('© OpenStreetMap, Mapillary',100,S-100);
 mapM.material.map.needsUpdate=true;mapDirty=false}
 const bb=(lat,lon,dl)=>{const dn=dl/Math.cos(lat*D);return`${lon-dn},${lat-dl},${lon+dn},${lat+dl}`};
@@ -145,7 +153,9 @@ function click(){if(!cal||busy)return;const d=fwd(),u=mapOpen?hit(mapM,d):hit(ic
 if(u){if(mapOpen)mapClick(u);else{mapOpen=true;mapDirty=true}return}
 if(cur)move(d)}
 function mapClick(u){const x=u.x*S,y=(1-u.y)*S;
-if(x>S-120&&y<240){map.z=Math.max(15,Math.min(19,map.z+(y<120?1:-1)));loadDots();return}
+const button=MAP_BUTTON_Y.findIndex(by=>Math.hypot(x-MAP_BUTTON_X,y-by)<=MAP_BUTTON_RADIUS);
+if(button===0){mapOpen=false;return}
+if(button>0){map.z=Math.max(15,Math.min(19,map.z+(button===1?1:-1)));loadDots();return}
 const[cx,cy]=wpx(map.lat,map.lon,map.z),sh=S*.4;let dx=0,dy=0;
 if(x<90)dx=-sh;else if(x>S-90)dx=sh;if(y<90)dy=-sh;else if(y>S-90)dy=sh;
 if(dx||dy){[map.lat,map.lon]=ll(cx+dx,cy+dy,map.z);loadDots();return}
@@ -181,6 +191,7 @@ hud.position.set(0,-.35,-1.5).applyQuaternion(q);hud.quaternion.copy(q);
 mapM.visible=cal&&mapOpen;iconM.visible=cal&&!mapOpen;if(mapDirty&&mapOpen)drawMap();
 const W=innerWidth,H=innerHeight;
 (stereo?[-1,1]:[0]).forEach((s,k)=>{const w=stereo?W/2:W;cam.aspect=w/H;cam.updateProjectionMatrix();
+if(stereo){cam.projectionMatrix.elements[8]=s*2*Number($('image-shift').value)/w;cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert()}
 cam.position.set(s*.032,0,0).applyQuaternion(q);cam.quaternion.copy(q);
 R.setViewport(k*w,0,w,H);R.setScissor(k*w,0,w,H);R.render(scene,cam)})}
 frame();
