@@ -54,13 +54,15 @@ clearTimeout(hT);if(ms)hT=setTimeout(()=>hud.visible=false,ms)}
 // ориентация головы
 const q=new THREE.Quaternion(),e=new THREE.Euler(),e2=new THREE.Euler(),q0=new THREE.Quaternion(),Z=new THREE.Vector3(0,0,1);
 const q1=new THREE.Quaternion(-Math.SQRT1_2,0,0,Math.SQRT1_2);
-let devQ=null,hasSensor=false,yaw=0,pit=0,sensorTimer,sensorPending=false;
+let devQ=null,hasSensor=false,yaw=0,pit=0,sensorTimer,sensorPending=false,lastRelative=0;
 function sensorStatus(message,retry=false){$('sensor-message').textContent=message;$('sensor-status').hidden=false;$('sensor-enable').hidden=!retry}
 function orientation(ev){
 if(![ev.alpha,ev.beta,ev.gamma].every(Number.isFinite))return;
 const angle=screen.orientation&&Number.isFinite(screen.orientation.angle)?screen.orientation.angle:window.orientation||0;
 e.set(ev.beta*D,ev.alpha*D,-ev.gamma*D,'YXZ');devQ=(devQ||new THREE.Quaternion()).setFromEuler(e).multiply(q1).multiply(q0.setFromAxisAngle(Z,-angle*D));
 hasSensor=true;clearTimeout(sensorTimer);$('sensor-status').hidden=true}
+function relativeOrientation(ev){if(![ev.alpha,ev.beta,ev.gamma].every(Number.isFinite))return;lastRelative=Date.now();orientation(ev)}
+function absoluteOrientation(ev){if(!lastRelative||Date.now()-lastRelative>750)orientation(ev)}
 async function enableSensor(){
 if(sensorPending)return;
 if(!window.isSecureContext){sensorStatus('Гироскопу нужен HTTPS. Открой сайт по защищённой ссылке.');return}
@@ -71,7 +73,8 @@ try{
 // На iPhone разрешение нужно запросить прямо из нажатия, до других await.
 if(typeof Sensor.requestPermission==='function'&&await Sensor.requestPermission()!=='granted'){
 sensorStatus('Доступ к гироскопу запрещён. Разреши датчики в настройках сайта и попробуй снова.',true);return}
-removeEventListener('deviceorientation',orientation);addEventListener('deviceorientation',orientation);
+removeEventListener('deviceorientation',relativeOrientation);addEventListener('deviceorientation',relativeOrientation);
+removeEventListener('deviceorientationabsolute',absoluteOrientation);addEventListener('deviceorientationabsolute',absoluteOrientation);
 if(!hasSensor){sensorStatus('Ожидание гироскопа…');clearTimeout(sensorTimer);
 sensorTimer=setTimeout(()=>{if(!hasSensor)sensorStatus('Нет показаний гироскопа. Проверь доступ к датчикам в браузере. Пока можно управлять пальцем.',true)},3000)}
 }catch(x){sensorStatus('Не удалось включить гироскоп. Проверь разрешение на датчики и попробуй снова.',true)}
