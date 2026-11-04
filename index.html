@@ -4,7 +4,8 @@
 <style>
 html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:system-ui,sans-serif;color:#fff}
 canvas{display:block;touch-action:none}
-#ui{position:fixed;inset:0;display:flex;flex-direction:column;gap:12px;align-items:center;justify-content:center;background:#111;padding:20px;text-align:center}
+#ui{position:fixed;inset:0;display:flex;flex-direction:column;gap:12px;align-items:center;justify-content:center;background:#111;padding:20px;text-align:center;overflow:auto}
+#diagnostics{width:min(100%,480px);max-height:50vh;overflow:auto;text-align:left;font:13px/1.4 monospace;white-space:pre-wrap;background:#222;border-radius:8px;padding:10px;box-sizing:border-box}
 #ui input,#ui button{font-size:18px;padding:12px 16px;border-radius:10px;border:0;max-width:90%}
 #ui button{background:#2d7ff9;color:#fff}
 #fade{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .25s}
@@ -15,7 +16,9 @@ canvas{display:block;touch-action:none}
 <div id="ui"><h2>StreetViewVR</h2>
 <input id="place" value="Paris, Eiffel Tower">
 <button id="vr">Старт в VR (очки)</button>
-<button id="flat" style="background:#444">Без очков (мышь / гироскоп)</button></div>
+<button id="flat" style="background:#444">Без очков (мышь / гироскоп)</button>
+<button id="diagnose" style="background:#444">Проверить датчики</button>
+<pre id="diagnostics" hidden></pre></div>
 <div id="fade"></div>
 <div id="sensor-status" role="status" hidden><span id="sensor-message"></span><button id="sensor-enable" type="button" hidden>Включить гироскоп</button></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -74,6 +77,23 @@ sensorTimer=setTimeout(()=>{if(!hasSensor)sensorStatus('Нет показани�
 }catch(x){sensorStatus('Не удалось включить гироскоп. Проверь разрешение на датчики и попробуй снова.',true)}
 finally{sensorPending=false;$('sensor-enable').disabled=false}}
 $('sensor-enable').onclick=enableSensor;
+// Проверка сырых событий браузера, независимо от управления камерой.
+$('diagnose').onclick=()=>{
+const panel=$('diagnostics');panel.hidden=false;
+$('diagnose').disabled=true;
+const data={orientation:{count:0,last:null,min:{},max:{}},absolute:{count:0,last:null,min:{},max:{}},motion:{count:0,last:null}};
+const fmt=n=>Number.isFinite(n)?n.toFixed(1):'нет';
+function render(){const line=(name,s)=>`${name}: событий ${s.count}\n  α ${fmt(s.last?.alpha)} [${fmt(s.min.alpha)}…${fmt(s.max.alpha)}]  β ${fmt(s.last?.beta)} [${fmt(s.min.beta)}…${fmt(s.max.beta)}]  γ ${fmt(s.last?.gamma)} [${fmt(s.min.gamma)}…${fmt(s.max.gamma)}]`;
+panel.textContent=`Поворачивай телефон 10 секунд. Числа в скобках — минимум и максимум.\nHTTPS: ${window.isSecureContext?'да':'нет'}; угол экрана: ${screen.orientation?.angle??window.orientation??'нет'}\n${line('Ориентация',data.orientation)}\n${line('Абсолютная',data.absolute)}\nДвижение: событий ${data.motion.count}; вращение α ${fmt(data.motion.last?.alpha)}, β ${fmt(data.motion.last?.beta)}, γ ${fmt(data.motion.last?.gamma)}\n${status}`}
+let status='Запрос доступа…';render();
+function record(s,ev){s.count++;s.last={alpha:ev.alpha,beta:ev.beta,gamma:ev.gamma};for(const k of ['alpha','beta','gamma'])if(Number.isFinite(ev[k])){s.min[k]=Math.min(s.min[k]??ev[k],ev[k]);s.max[k]=Math.max(s.max[k]??ev[k],ev[k])}render()}
+const onOrientation=ev=>record(data.orientation,ev),onAbsolute=ev=>record(data.absolute,ev),onMotion=ev=>{data.motion.count++;data.motion.last=ev.rotationRate;render()};
+// Оба запроса выполняются непосредственно в обработчике нажатия.
+let requests;try{requests=[window.DeviceOrientationEvent,window.DeviceMotionEvent].map(api=>typeof api?.requestPermission==='function'?api.requestPermission():Promise.resolve('не требуется'))}catch(err){requests=[Promise.reject(err)]}
+Promise.allSettled(requests).then(results=>{status='Разрешения: '+results.map(r=>r.status==='fulfilled'?r.value:'ошибка').join(', ');render()});
+addEventListener('deviceorientation',onOrientation);addEventListener('deviceorientationabsolute',onAbsolute);addEventListener('devicemotion',onMotion);
+setTimeout(()=>{removeEventListener('deviceorientation',onOrientation);removeEventListener('deviceorientationabsolute',onAbsolute);removeEventListener('devicemotion',onMotion);status+='; проверка завершена';$('diagnose').disabled=false;render()},10000);
+};
 let dr=null;
 R.domElement.addEventListener('pointerdown',ev=>dr={x:ev.clientX,y:ev.clientY,m:0});
 addEventListener('pointermove',ev=>{if(!dr)return;const dx=ev.clientX-dr.x,dy=ev.clientY-dr.y;dr.x=ev.clientX;dr.y=ev.clientY;dr.m+=Math.abs(dx)+Math.abs(dy);
